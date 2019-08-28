@@ -111,6 +111,10 @@ async function gapiLoaded() {
         return;
     }
 
+    document.querySelector("#signout").addEventListener('click', ev => {
+        drive.signOut();
+    });
+
     window.addEventListener('hashchange', ev => {
         ev.preventDefault();
         loadList(drive, (location.hash.match(/#folder:(.+)/) || [])[1] || 'root');
