@@ -1,3 +1,4 @@
+"use strict";
 
 // <script src="js/googledrive.js"></script>
 // <script src="https://apis.google.com/js/api.js?onload=gapiLoaded" async defer></script>
@@ -10,9 +11,7 @@ class GoogleDrive {
         };
     }
     async init(signIn = true) {
-        await new Promise((resolve, reject) => {
-            gapi.load('client:auth2', () => resolve(null));
-        });
+        await new Promise((resolve, _) => gapi.load('client:auth2', resolve));
         let auth = await gapi.auth2.init(this.params);
         if (!auth.isSignedIn.get()) {
             if (!signIn) return false;
@@ -24,13 +23,15 @@ class GoogleDrive {
     signOut() {
         gapi.auth2.getAuthInstance().signOut();
     }
-    async getFiles(folder, limit) {
+    async getFiles(folder, limit, pageToken, options) {
+        options = options || {};
         // kind, webViewLink
         let response = await gapi.client.drive.files.list({
             fields: "nextPageToken, files(id, name, size, mimeType, modifiedTime, iconLink, thumbnailLink)",
-            orderBy: "name,modifiedTime",
+            orderBy: options.orderBy || "modifiedTime desc",
             q: "trashed=false and '" + (folder || 'root') + "' in parents",
             pageSize: limit || 50,
+            pageToken: pageToken,
             spaces: "drive"
         });
         if (!response || response.status != 200) {
@@ -59,47 +60,21 @@ class GoogleDrive {
             resource: { mimeType: mimeType }
         });
     }
-    async delete(fileId, revId) {
+    async delete(fileId) {
         return await gapi.client.drive.files.delete({
-            fileId: fileId,
-            revisionId: revId
-        });
+            fileId: fileId
+        }).status == 204;
     }
-    getFileBlob(fileId) {
-        return new Promise((resolve, reject) => {
-            let xhr = new XMLHttpRequest();
-            xhr.responseType = 'blob';
-            xhr.open('GET', "https://www.googleapis.com/drive/v3/files/" + fileId + "?alt=media");
-            xhr.setRequestHeader('Authorization', 'Bearer ' + gapi.auth.getToken().access_token);
-            xhr.onload = () => {
-                xhr.status === 200 ? resolve(xhr.response) : reject(new Error(xhr.statusText));
-            };
-            xhr.onerror = () => {
-                reject(new Error(xhr.statusText));
-            };
-            xhr.send();
-        });
+    async getFileBlob(fileId) {
+        let url = "https://www.googleapis.com/drive/v3/files/" + fileId + "?alt=media";
+        let headers = {'Authorization': 'Bearer ' + gapi.auth.getToken().access_token};
+        let response = await fetch(url, {headers: new Headers(headers)});
+        if (!response.ok) throw new Error(response.statusText);
+        return await response.blob();
     }
 }
 
-async function loadList(drive, folder) {
-    let fileListEl = document.querySelector("#file_list");
-    element_clear(fileListEl);
-
-    (await drive.getFiles(folder)).files.forEach(file => {
-        let el = element("li", [element('img', [], { src: file.iconLink }), `${file.name} (${file.mimeType})`]);
-        element_append(fileListEl, el);
-        el.addEventListener('click', ev => {
-            console.log(file);
-            if (file.mimeType == "application/vnd.google-apps.folder") {
-                location.hash = "#folder:" + file.id;
-            } else {
-                location.href = file.thumbnailLink.replace(/=s\d+/, "=s2048");
-            }
-        });
-    });
-}
-
+// for test page
 async function gapiLoaded() {
     const clientIds = {
         "http://localhost:8080": "86954684848-e879qasd2bnnr4pcdiviu68q423gbq4m.apps.googleusercontent.com",
@@ -111,13 +86,39 @@ async function gapiLoaded() {
         return;
     }
 
+    let loadList = async function (folder) {
+        let fileListEl = document.querySelector("#file_list");
+        element_clear(fileListEl);
+
+        (await drive.getFiles(folder, 100)).files.forEach(file => {
+            let el = element("li", [element('img', [], { src: file.iconLink, crossorigin: "anonymous" }), `${file.name} (${file.mimeType})`]);
+            element_append(fileListEl, el);
+            el.addEventListener('click', ev => {
+                console.log(file);
+                if (file.mimeType == "application/vnd.google-apps.folder") {
+                    location.hash = "#folder:" + file.id;
+                } else if (file.thumbnailLink) {
+                    document.querySelector("#thumb_image").src = file.thumbnailLink.replace(/=s\d+/, "=s2048");
+                    (async () => {
+                        console.log("file blob", await drive.getFileBlob(file.id));
+                        let response = await fetch(file.thumbnailLink, { credentials: "same-origin", referrerPolicy: "origin-when-cross-origin" });
+                        console.log(response);
+                        if (response.ok) {
+                            console.log("thumb blob", await response.blob());
+                        }
+                    })();
+                }
+            });
+        });
+    };
+
     document.querySelector("#signout").addEventListener('click', ev => {
         drive.signOut();
     });
 
     window.addEventListener('hashchange', ev => {
         ev.preventDefault();
-        loadList(drive, (location.hash.match(/#folder:(.+)/) || [])[1] || 'root');
+        loadList((location.hash.match(/#folder:(.+)/) || [])[1] || 'root');
     });
-    loadList(drive, (location.hash.match(/#folder:(.+)/) || [])[1] || 'root');
+    loadList((location.hash.match(/#folder:(.+)/) || [])[1] || 'root');
 }
